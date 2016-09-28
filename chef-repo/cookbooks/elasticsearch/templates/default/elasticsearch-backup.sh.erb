@@ -1,0 +1,342 @@
+#!/bin/bash
+# This file was automatically generated and dropped off by chef (i.e., don't mess with it)!
+
+# Performs FULL copy (both primary and replica shards) of an elasticsearch 0.9 database
+# This script will NOT produce a working backup, it is only useful for the initial (lengthy) rsync to the target destination
+# The reason this script exists is because the initial copy takes so long, there is some fear that a LVM snapshot might fill up,
+#     which would be a disaster. So, all the LVM stuff has been stripped out. This is a straight copy of the live ES data.
+#     After this script is run, a real backup should be taken using LVM snapshots. It should run pretty fast.
+
+if [ $# -ne 3 ]
+then
+  echo "Usage: `basename $0` initial_or_final target_es_instance_role_name timestamp_or_identifier"
+  exit 65
+fi
+
+CAPTAIN="<%= node.elasticsearch[:backup][:captain] %>"
+if [[  -z  $CAPTAIN  ]]; then
+    echo "Chef setting elasticsearch.backup.captain is not set. Cannot complete backup."
+    exit 65
+elif ! [[ "$CAPTAIN" == *avention.com ]]; then
+    CAPTAIN="$CAPTAIN.avention.com"
+fi
+
+
+RUN_MODE=`echo $1 | tr '[:upper:]' '[:lower:]'`
+
+CLUSTER_NAME="<%= node.elasticsearch[:cluster][:name] %>"
+
+TARGET_INSTANCE=$2
+TARGET_PREFIX=""
+TARGET_SERVER=""
+TARGET_DESTINATION=
+
+IDENTIFIER=$3
+TIMESTAMP=`date +%G%m%d%H%M`
+
+THIS_INSTANCE="<%=node["chef"]["instance_role"] %>"
+
+INSTANCE_NODE_COUNT=<%= node.elasticsearch[:backup][:data_node_count] %>
+DD_MOUNT="<%= node.elasticsearch[:backup][:dd_mount] %>"
+
+# Check to make sure the DD_MOUNT is writable
+if [ ! -w $DD_MOUNT ]; then
+    echo "Error: The Data Domain mount $DD_MOUNT is not writable.  Cannot complete backup."
+    exit 65
+fi
+
+# Check to make sure the DD_MOUNT directory is a mount and not just local
+DD_MOUNT_COUNT=`df | grep "$DD_MOUNT" | wc -l`
+if [ $DD_MOUNT_COUNT -eq 0 ]; then
+    echo "Error: The Data Domain is not mounted.  Cannot complete backup."
+    exit 65
+fi
+
+STATUS_DIR="$DD_MOUNT/${IDENTIFIER}/status"
+mkdir -p $STATUS_DIR
+
+SNAPSHOT_SIZE="<%= node.elasticsearch[:backup][:snapshot_size] %>"
+SNAP_DIR="/mnt/elasticsearch_snapshot"
+SNAP_NAME="/dev/vg_es/elasticsearch_snap"
+
+SOURCE_SERVER=`/bin/hostname -s`
+HOST_NUM_REGEX="([0-9][0-9])$"
+
+# This is the source directory, where the elasticsearch data lives
+LIVE_DIR="/var/lib/elasticsearch"
+
+
+if [ "$TARGET_INSTANCE" != "$THIS_INSTANCE" ]; then
+  case $TARGET_INSTANCE in
+      instance-av-prd2-esa ) TARGET_PREFIX="prd2-av-esa" ;;
+      instance-av-prd2-esb ) TARGET_PREFIX="prd2-av-esb" ;;
+      instance-av-prd6-esa ) TARGET_PREFIX="prd6-av-esa" ;;
+      instance-av-stg1 ) TARGET_PREFIX="stg1-av-esa" ;;
+      instance-cmdm-prd2 ) TARGET_PREFIX="prd2-cmdm-es" ;;
+      instance-cmdm-prd1 ) TARGET_PREFIX="prd1-cmdm-es" ;;
+      instance-cmdm-stg1 ) TARGET_PREFIX="stg1-cmdm-es" ;;
+      mdm-instance-prd1-cmdm ) TARGET_PREFIX="prd1-cmdm-es" ;;
+      mdm-instance-stg1-cmdm ) TARGET_PREFIX="stg1-cmdm-es" ;;
+      dd )
+          TARGET_DESTINATION="$DD_MOUNT/${IDENTIFIER}/${SOURCE_SERVER}/data"
+        ;;
+      * ) 
+          echo "Error: Invalid target Instance"
+          exit 65
+      ;;
+  esac
+
+
+  if [ -z $TARGET_DESTINATION ]; then
+      [[ $SOURCE_SERVER =~ $HOST_NUM_REGEX ]]
+      HOST_NUM="${BASH_REMATCH[1]}"
+      TARGET_SERVER="${TARGET_PREFIX}${HOST_NUM}"
+
+      if [ ! $HOST_NUM -gt 0 ]; then
+         echo "Could not parse host number from source server name: ${SOURCE_SERVER}"
+         exit 65
+      fi
+
+      TARGET_DESTINATION="elasticsearch@$TARGET_SERVER:$LIVE_DIR/data"
+  else
+    mkdir -p $TARGET_DESTINATION
+  fi
+
+else
+  echo "You cannot copy an ES instance to itself!  Get a cup of coffee, rethink things, and try again."
+  exit 65
+fi
+
+
+
+set -u
+
+
+# This is the directory where the log for this copy activity will be stored, where the elasticsearch data lives
+LOG_DIR="/var/log/elasticsearch/backup-${IDENTIFIER}"
+
+########################################################################################
+
+
+refreshStatus() {
+    SNAPSHOT_CREATED_COUNT=`ls -l $STATUS_DIR/*.snapshot_created 2>/dev/null | wc -l`
+    SNAPSHOT_DESTROYED_COUNT=`ls -l $STATUS_DIR/*.snapshot_destroyed 2>/dev/null | wc -l`
+    BACKUP_COMPLETE_COUNT=`ls -l $STATUS_DIR/*.backup_complete 2>/dev/null | wc -l`
+}
+
+doGetSequenceNumber() {
+    set -e
+
+    PI_DB_HOST="<%= node.elasticsearch[:backup][:pipelinedb][:host] %>"
+    if [[ -z $PI_DB_HOST ]]; then
+        PI_DB_HOST="<%= node.elasticsearch[:backup][:pipelinedb][:hostname] %>"
+    fi
+    PI_DB_NAME="<%= node.elasticsearch[:backup][:pipelinedb][:database] %>"
+    PI_DB_USER="<%= node.elasticsearch[:backup][:pipelinedb][:username] %>"
+    export PGPASSWORD="<%= node.elasticsearch[:backup][:pipelinedb][:password] %>"
+
+    PI_DB_QUERY="select last_sequence_num from concord_sync_status;"
+    SEQNUM=`psql -h $PI_DB_HOST -U $PI_DB_USER -d $PI_DB_NAME -c '$PI_DB_QUERY'`  || true
+    echo "Pipeline Sequence Status: $SEQNUM"
+    echo $SEQNUM > $STATUS_DIR/pipeline_sequence_number
+}
+
+
+doInitialCopy() {
+
+    set -e
+
+    BEGIN_TIME=`date`;
+    echo "Beginning Initial ES Copy at $BEGIN_TIME"
+
+    echo "Copying ES data from $SOURCE_SERVER:$LIVE_DIR/data to $TARGET_DESTINATION.";
+
+    rsync -avL --delete -e '/usr/bin/ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /opt/elasticsearch/.ssh/backup_sync-id_rsa' $LIVE_DIR/data/$CLUSTER_NAME $TARGET_DESTINATION >> $LOG_DIR/rsync-${TIMESTAMP}.log 2>&1;
+
+    sleep 5;
+
+    END_TIME=`date`
+    echo "Initial ES Copy Completed at $END_TIME"
+}
+
+removeSnapshot() {
+
+    set -e
+
+    echo "- Unmounting LVM snapshot";
+    umount $SNAP_DIR || true
+    rmdir  $SNAP_DIR || true
+
+    echo "- Removing LVM snapshot $SNAP_NAME";
+    /sbin/lvremove -vf $SNAP_NAME || true
+    touch "$STATUS_DIR/$HOSTNAME.snapshot_destroyed"
+
+}
+
+clearStatus() {
+    echo "Clearing Status for $HOSTNAME"
+    rm -f $STATUS_DIR/$HOSTNAME.*
+}
+
+enableFlushing() {
+    if [ "$CAPTAIN" == "$HOSTNAME" ]; then
+        /bin/echo -n "Enabling Index Flushing...   "
+        curl -XPUT "http://$HOSTNAME:9200/_all/_settings" -d '{"index": {"translog.disable_flush": "false" } }'
+        /bin/echo
+
+        /bin/echo -n "Enabling Shard Allocation... "
+        curl -XPUT "http://$HOSTNAME:9200/*/_settings" -d '{"index.routing.allocation.disable_allocation" : "false" }'
+        /bin/echo
+    fi
+}
+
+doFinalCopy() {
+
+    set -e
+
+
+    clearStatus
+
+    BEGIN_TIME_SEC=`date +%s`;
+    BEGIN_TIME=`date`;
+    echo "Beginning Final Copy at $BEGIN_TIME"
+
+    # It doesn't matter which node turns off index flusing. You can't over-disable flusing, so it's safe for them all to call this.  Captain will clean it up.
+    echo -n "Disabling Index Flushing...   "
+    curl -XPUT "http://$HOSTNAME:9200/_all/_settings" -d '{ "index": { "translog.disable_flush": "true" } }'
+    echo
+
+    echo -n "Disabling Shard Allocation... "
+    curl -XPUT "http://$HOSTNAME:9200/*/_settings" -d '{ "index.routing.allocation.disable_allocation" : "true" }'
+    echo
+    sleep 10;
+
+
+    # Remove old local log files
+    echo "Cleaning up old log files"
+    find $LOG_DIR -type f -mtime +31 | xargs -iLOGFILE rm -f "LOGFILE"
+
+
+    #Create the LVM Snapshot
+    echo "Creating LVM snapshot"
+    /sbin/lvcreate -L$SNAPSHOT_SIZE -s -n $SNAP_NAME vg_es/es
+
+    echo "Creating LVM snapshot mount point"
+    mkdir -p $SNAP_DIR
+
+    echo "Mounting LVM snapshot"
+    mount -o,ro $SNAP_NAME $SNAP_DIR
+
+    echo "LVM snapshot created."
+    touch $STATUS_DIR/$HOSTNAME.snapshot_created
+
+
+    if [ "$CAPTAIN" == "$HOSTNAME" ]; then
+
+        while true; do
+            refreshStatus
+            if [ $SNAPSHOT_CREATED_COUNT -eq $INSTANCE_NODE_COUNT ]; then
+
+                echo "Getting pipeline sequence number"
+                doGetSequenceNumber
+
+                echo "All LVM snapshots created.  It is now safe to enable Elasticsearch index flushing and shard reallocation."
+
+                enableFlushing
+
+                break
+            fi
+            sleep 30
+        done
+    fi
+
+    echo "Synchronizing ES data from $SOURCE_SERVER:$SNAP_DIR/data to $TARGET_DESTINATION";
+    rsync -avL --delete -e '/usr/bin/ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /opt/elasticsearch/.ssh/backup_sync-id_rsa' $SNAP_DIR/data/$CLUSTER_NAME $TARGET_DESTINATION >> $LOG_DIR/rsync-${TIMESTAMP}.log
+
+    touch "$STATUS_DIR/$HOSTNAME.backup_complete"
+
+    sleep 5;
+
+    removeSnapshot
+
+    END_TIME=`date`
+
+    echo "Final copy complete on this node at $END_TIME"
+
+    if [ "$CAPTAIN" == "$HOSTNAME" ]; then
+
+        while true; do
+            refreshStatus
+            if [ $BACKUP_COMPLETE_COUNT -eq $INSTANCE_NODE_COUNT ]; then
+
+
+                END_TIME_SEC=`date +%s`
+                END_TIME=`date`
+                TOTAL_TIME_SEC=$((END_TIME_SEC - BEGIN_TIME_SEC))
+                TOTAL_TIME=$(secondsToHhMmSs $TOTAL_TIME_SEC)
+                echo "Final Copy Complete on all nodes at $END_TIME. Backup in $TOTAL_TIME."
+
+                echo "ES full backup completed at $END_TIME.  Backup in $TOTAL_TIME." | mail -s "ES Full Backup - $HOSTNAME" "jason.patton@avention.com"
+
+                break
+            fi
+        done
+    fi
+
+
+}
+
+secondsToHhMmSs() {
+
+    h=$(( $1 / 3600 ))
+    m=$(( ( $1 / 60 ) % 60 ))
+    s=$(( $1 % 60 ))
+
+    printf "%02d:%02d:%02d\n" $h $m $s
+}
+
+
+
+########################################################################################
+
+mkdir -p $LOG_DIR
+chown elasticsearch:elasticsearch $LOG_DIR
+
+case $RUN_MODE in
+      initial ) 
+          doInitialCopy 2> $LOG_DIR/$SOURCE_SERVER-$TIMESTAMP.errors 1> $LOG_DIR/$SOURCE_SERVER-$TARGET_SERVER.log &
+      ;;
+      final ) 
+          doFinalCopy 2> $LOG_DIR/$SOURCE_SERVER-$TIMESTAMP.errors 1> $LOG_DIR/$SOURCE_SERVER-$TIMESTAMP.log &
+      ;;
+      full )
+          doInitialCopy 2> $LOG_DIR/$SOURCE_SERVER-$TIMESTAMP.errors 1> $LOG_DIR/$SOURCE_SERVER-$TIMESTAMP.log &
+
+          wait
+
+          doFinalCopy 2> $LOG_DIR/$SOURCE_SERVER-$TIMESTAMP.errors 1> $LOG_DIR/$SOURCE_SERVER-$TIMESTAMP.log &
+      ;;
+      cleanup )
+          removeSnapshot
+          clearStatus
+          enableFlushing
+      ;;
+      statustest )
+           touch "$STATUS_DIR/$HOSTNAME.test1"
+      ;;
+      * ) 
+          echo "Invalid run mode: ${RUN_MODE}.  The first argument to this script must be \"initial\", \"final\", \"full\", or \"cleanup\"."
+          exit 65
+      ;;
+esac
+
+wait
+
+# Too much rubbish in the log to get a real error count
+#ERR_COUNT=`cat $LOG_DIR/$SOURCE_SERVER-$TARGET_SERVER.errors | wc -l`
+#if [ "$ERR_COUNT" -gt 0 ]; then
+#    echo "$ERR_COUNT Errors encountered when running ES backup on $HOSTNAME"
+#    cat $LOG_DIR/backup-$TIMESTAMP.errors | mail -s "ES Full Backup - $ERR_COUNT Errors on $HOSTNAME" "jason.patton@avention.com"
+#fi
+
+########################################################################################
