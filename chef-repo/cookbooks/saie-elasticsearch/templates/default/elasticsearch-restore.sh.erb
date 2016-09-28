@@ -1,0 +1,74 @@
+#!/bin/bash
+# This file was automatically generated and dropped off by chef (i.e., don't mess with it)!
+
+
+if [ $# -ne 1 ]
+then
+  echo "Usage: `basename $0` backup_directory"
+  exit 65
+fi
+
+BACKUP_BASE_DIR=$1
+
+CLUSTER_NAME=<%= node.elasticsearch[:cluster][:name] %>
+MY_HOSTNAME=_SERVER=`/bin/hostname -s`
+HOST_NUM_REGEX="([0-9][0-9])$"
+[[ $MY_HOSTNAME =~ $HOST_NUM_REGEX ]]
+HOST_NUM="${BASH_REMATCH[1]}"
+SOURCE_SERVER="${TARGET_PREFIX}${HOST_NUM}"
+
+if [ ! $HOST_NUM -gt 0 ]; then
+    echo "Could not parse host number from source server name: ${SOURCE_SERVER}"
+    exit 65
+fi
+echo "Host Number is ${HOST_NUM}"
+
+
+SOURCE_SERVER=`ls $BACKUP_BASE_DIR | grep $HOST_NUM`
+echo "Source Server is \"${SOURCE_SERVER}\""
+
+BACKUP_DIR=$BACKUP_BASE_DIR/$SOURCE_SERVER
+echo "Backup Dir is \"${BACKUP_DIR}\""
+
+# This is the source directory, where the elasticsearch data lives
+LIVE_DIR="/var/lib/elasticsearch"
+
+# This is the directory where the log for this copy activity will be stored, where the elasticsearch data lives
+LOG_DIR="/var/log/elasticsearch/restore-${TIMESTAMP}"
+mkdir -p $LOG_DIR
+chown elasticsearch:elasticsearch $LOG_DIR
+
+doRestore() {
+
+    set -e
+
+
+    BEGIN_TIME=`date +%G%m%d%H%M`;
+
+    # Shut down elasticsearch
+    echo "Shutting down ES"
+    #service elasticsearch-master stop
+    service elasticsearch stop
+    sleep 30
+
+    echo "$BEGIN_TIME - Beginning Initial ES Copy"
+
+    echo "Copying ES data from $BACKUP_DIR/data to $LIVE_DIR/data."
+
+    # Restore data
+    rsync -avL --delete $BACKUP_DIR/data/$CLUSTER_NAME $LIVE_DIR/data >> $LOG_DIR/rsync_data-${BEGIN_TIME}.log 2>&1;
+
+    sleep 5;
+
+    # Fix permissions
+    chown -R elasticsearch:elasticsearch $LIVE_DIR
+
+    END_TIME=`date +%G%m%d%H%M`
+    echo "Initial ES Copy Complete - $BEGIN_TIME to $END_TIME"
+}
+
+doRestore 2> $LOG_DIR/$SOURCE_SERVER-$TARGET_SERVER.errors 1> $LOG_DIR/$SOURCE_SERVER-$TARGET_SERVER.log &
+
+wait
+
+echo "Restore complete."

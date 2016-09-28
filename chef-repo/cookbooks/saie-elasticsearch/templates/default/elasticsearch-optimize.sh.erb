@@ -1,0 +1,51 @@
+#!/bin/bash
+# This file was automatically generated and dropped off by chef!
+
+# Performs elasticsearch optimize
+# See http://www.elasticsearch.org/guide/en/elasticsearch/reference/0.90/indices-optimize.html
+
+########################################################################################
+
+TIMESTAMP=`date +%G%m%d%H%M`;
+
+LOG_DIR="/var/log/elasticsearch/optimize"
+
+########################################################################################
+
+doOptimize() {
+
+    set -e
+
+    BEGIN_TIME=`date +%G%m%d%H%M`;
+
+    echo "$BEGIN_TIME - Beginning Optimize"
+    /bin/echo "Performing gratuitous flush...   "
+    curl -XPOST "http://localhost:9200/_flush"
+
+    /bin/echo "Running shard optimization, cleanup only...   "
+    # Fun fact: If 'flush' is not set to true, then none of the old shards will be removed.
+    curl -XPOST "http://localhost:9200/_optimize?only_expunge_deletes=true&flush=true&wait_for_merge=true"
+
+    END_TIME=`date +%G%m%d%H%M`
+    echo "Optimize Complete ($BEGIN_TIME to $END_TIME)"
+
+}
+
+########################################################################################
+
+mkdir -p $LOG_DIR
+chown elasticsearch:elasticsearch $LOG_DIR
+
+doOptimize 2> $LOG_DIR/optimize-$TIMESTAMP.errors 1> $LOG_DIR/optimize-$TIMESTAMP.log &
+
+wait
+
+ERR_COUNT=`cat $LOG_DIR/optimize-$TIMESTAMP.errors | wc -l`
+if [ "$ERR_COUNT" -gt 0 ]; then
+    echo "$ERR_COUNT Error(s) encountered when running ES optimize on $HOSTNAME"
+    cat $LOG_DIR/optimize-$TIMESTAMP.errors | mail -s "ES Optimize - $ERR_COUNT Error(s) on $HOSTNAME" "ops@avention.com"
+fi
+
+printf "$ERR_COUNT Errors\n${HOSTNAME}\n" | mail -s "ES Optimize Finished" "5127996258@messaging.sprintpcs.com"
+
+########################################################################################

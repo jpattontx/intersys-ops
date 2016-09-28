@@ -1,0 +1,12 @@
+#!/bin/bash
+CAPTAIN=<%= node["elasticsearch"]["backup_captain"] %>
+
+HOSTNAME=`hostname`
+INFILE=`ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no zero@$CAPTAIN "cat /home/zero/zero_requests" 2>/dev/null | grep  $HOSTNAME 2>&1`
+echo $INFILE | grep -q $HOSTNAME
+
+# Dont add to the zero_request if its already there
+if [ $? == 1 ]
+then
+   ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no zero@$CAPTAIN "echo \"$HOSTNAME\" >> /home/zero/zero_requests" 2>/dev/null
+fi

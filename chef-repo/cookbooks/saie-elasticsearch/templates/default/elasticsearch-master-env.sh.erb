@@ -1,0 +1,41 @@
+# JVM Configuration for ElasticSearch
+# ===================================
+# See <https://github.com/elasticsearch/elasticsearch/blob/master/bin/elasticsearch.in.sh>
+#
+
+<%= "JAVA_HOME='#{node.elasticsearch[:java_home]}'\n" if node.elasticsearch[:java_home] -%>
+ES_HOME='<%= "#{node.elasticsearch[:dir]}/elasticsearch" %>'
+ES_DIRS=''
+
+# AS of 2.0 we CANNOT have any invalid entries on the classpath.
+# The old ones appear to load the siagr directory. If its there and there are files we will add it
+if [ -d $ES_HOME/lib/sigar ] && [ `ls $ES_HOME/lib/sigar | wc -l` -gt 0 ]; then
+         ES_DIRS=":$ES_HOME/lib/sigar/*"
+fi
+
+# If the classpath is set append it otherwise just set it
+if [ "x$ES_CLASSPATH" = "x" ]; then
+        ES_CLASSPATH=$ES_HOME/lib/*$ES_DIRS
+else
+        ES_CLASSPATH=$ES_CLASSPATH:$ES_HOME/lib/*$ES_DIRS
+fi
+
+
+ES_HEAP_SIZE=<%= node.elasticsearch[:allocated_memory] %>
+
+ES_JAVA_OPTS="
+  -server
+  -Djava.net.preferIPv4Stack=true
+  -Des.config=<%= node.elasticsearch[:path][:conf] %>/elasticsearch-master.yml
+  -Xms4096m
+  -Xmx4096m
+  -Xss<%= node.elasticsearch[:thread_stack_size] %>
+  <%= node.elasticsearch[:gc_settings] %>
+<% if node.elasticsearch[:jmx] %>
+  -Dcom.sun.management.jmxremote.ssl=false
+  -Dcom.sun.management.jmxremote.authenticate=false
+  -Dcom.sun.management.jmxremote.port=3334
+  -Djava.rmi.server.hostname=<%= node[:ipaddress] %>
+<% end %>
+  <%= node.elasticsearch[:env_options] %>
+"

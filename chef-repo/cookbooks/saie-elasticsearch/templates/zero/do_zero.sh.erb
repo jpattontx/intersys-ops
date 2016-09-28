@@ -1,0 +1,90 @@
+#!/bin/bash
+CONTROLDIRECTORY=/home/zero
+CONCURRENT=<%= node["elasticsearch"]["zero"]["concurrent"] %>
+INTERVAL=<%= node["elasticsearch"]["zero"]["check_interval"] %>
+LOOPS=<%= Integer(Integer(node["elasticsearch"]["zero"]["max_time"])/Integer(node["elasticsearch"]["zero"]["check_interval"])) %>
+CAPTAIN=<%= node["elasticsearch"]["backup_captain"] %>
+
+FILESIZE=<%= node["elasticsearch"]["zero"]["file_size"] %>
+MINFREE=<%= node["elasticsearch"]["zero"]["min_free"] %>
+DIRECTORYS="<%= node["elasticsearch"]["zero"]["directorys"].join " " %>"
+
+
+ZERODONE=0
+CURRENTLOOP=0
+HOSTNAME=`hostname`
+
+while [ $CURRENTLOOP -lt $LOOPS ] && [ $ZERODONE == 0 ]
+do
+   echo "Checking For permission to zero"
+   CURRENTLOOP=$(($CURRENTLOOP + 1))
+
+   INFILE=`ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no zero@$CAPTAIN "cat $CONTROLDIRECTORY/permission_to_zero" 2>/dev/null | grep $HOSTNAME`
+
+   echo $INFILE | grep -q $HOSTNAME
+
+
+   if [ $? == 0 ]
+   then
+      echo "Permission to zero Granted"
+
+      <% if node["elasticsearch"]["zero"]["solarwinds"] != nil and node["elasticsearch"]["zero"]["solarwinds"]["Base64_Auth"] != nil and node["elasticsearch"]["zero"]["solarwinds"]["node"][node["hostname"]] != nil and node["elasticsearch"]["zero"]["solarwinds"]["server"] != nil %>
+
+         curl -k -H "Authorization: Basic <%= node["elasticsearch"]["zero"]["solarwinds"]["Base64_Auth"] %>" -H "Content-Type: application/json" "https://<%= node["elasticsearch"]["zero"]["solarwinds"]["server"] %>:17778/SolarWinds/InformationService/v3/Json/Query?query=SELECT+P.NoPage+FROM+Orion.Nodes+AS+N+join+Orion.NodesCustomProperties+AS+P+on+(N.NodeID+%3D+P.NodeID)+where+N.NodeID+%3D+<%= node["elasticsearch"]["zero"]["solarwinds"]["node"][node["hostname"]] %>" 2>/dev/null | grep -q true
+
+         DISABLED=$?
+
+         if [ $DISABLED == 1 ]
+         then
+            curl -k -H "Authorization: Basic <%= node["elasticsearch"]["zero"]["solarwinds"]["Base64_Auth"] %>" -H "Content-Type: application/json" https://<%= node["elasticsearch"]["zero"]["solarwinds"]["server"] %>:17778/SolarWinds/InformationService/v3/Json/BulkUpdate -d '{"uris":["swis://<%= node["elasticsearch"]["zero"]["solarwinds"]["server"] %>/Orion/Orion.Nodes/NodeID=<%= node["elasticsearch"]["zero"]["solarwinds"]["node"][node["hostname"]] %>/CustomProperties"],"properties":{"NoPage":"true"}}'
+         fi
+      <%end%>
+
+      for DIR in $DIRECTORYS
+      do
+         echo "Zeroing directory $DIR"
+         ZEROFILE=0
+
+         CURSIZE=`df -B 1M $DIR | grep -vE '^Filesystem|tmpfs|cdrom' | awk '{ print $4 }'`
+
+         while [ $(($CURSIZE - $FILESIZE)) -gt $MINFREE ]
+         do
+
+            if [ ! -d $DIR/zero ]
+            then
+            echo "Creating zero file directory $DIR/zero"
+            mkdir -p $DIR/zero
+            fi
+
+            echo "Write zero file zero.$ZEROFILE"
+            dd if=/dev/zero of=$DIR/zero/zero.$ZEROFILE bs=1M count=$FILESIZE 2>/dev/null
+            ZEROFILE=$(($ZEROFILE + 1))
+            CURSIZE=`df -B 1M $DIR | grep -vE '^Filesystem|tmpfs|cdrom' | awk '{ print $4 }'`
+         done
+
+         echo "Removing Zero files"
+         rm -rf $DIR/zero/zero.*
+      done
+
+
+      echo "Notify Captain of zero complete"
+      ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no zero@$CAPTAIN "sed -i \"/$HOSTNAME/d\" $CONTROLDIRECTORY/permission_to_zero" 2>/dev/null
+      ZERODONE=1
+
+      <% if node["elasticsearch"]["zero"]["solarwinds"] != nil and node["elasticsearch"]["zero"]["solarwinds"]["Base64_Auth"] != nil and node["elasticsearch"]["zero"]["solarwinds"]["node"][node["hostname"]] != nil and node["elasticsearch"]["zero"]["solarwinds"]["server"] != nil %>
+         sleep 660
+
+         if [ $DISABLED == 1 ]
+         then
+            curl -k -H "Authorization: Basic <%= node["elasticsearch"]["zero"]["solarwinds"]["Base64_Auth"] %>" -H "Content-Type: application/json" https://<%= node["elasticsearch"]["zero"]["solarwinds"]["server"] %>:17778/SolarWinds/InformationService/v3/Json/BulkUpdate -d '{"uris":["swis://<%= node["elasticsearch"]["zero"]["solarwinds"]["server"] %>/Orion/Orion.Nodes/NodeID=<%= node["elasticsearch"]["zero"]["solarwinds"]["node"][node["hostname"]] %>/CustomProperties"],"properties":{"NoPage":"false"}}'
+         fi
+      <%end%>
+
+   else
+
+   echo "Not allowed to zero. Waiting $INTERVAL seconds. $(($LOOPS - $CURRENTLOOP)) loops remaining"
+   sleep $INTERVAL
+
+   fi
+
+done
