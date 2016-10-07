@@ -1,0 +1,131 @@
+######################### ElasticSearch Configuration  ########################
+
+# This file is managed by Chef, do not edit manually, your changes *will* be overwritten!
+#
+# Please see the source file for context and more information:
+#
+# https://github.com/elasticsearch/elasticsearch/blob/master/config/elasticsearch.yml
+#
+# To set configurations not exposed by this template, set the
+# `node.elasticsearch[:custom_config]` attribute in your node configuration,
+# `elasticsearch/settings` data bag, role/environment definition, etc:
+#
+#     // ...
+#     'threadpool.index.type' => 'fixed',
+#     'threadpool.index.size' => '2'
+#     // ...
+
+################################### Cluster ###################################
+
+<%= print_value @nodetype,'cluster.name' -%>
+
+#################################### Node #####################################
+
+<%= print_value @nodetype, 'node.name' -%>
+node.master: <%= @is_master %>
+node.data: <%= @is_data %>
+<%= print_value @nodetype, 'node.max_local_storage_nodes' -%>
+
+#################################### Index ####################################
+
+<%= print_value @nodetype, 'index.number_of_shards' -%>
+<%= print_value @nodetype, 'index.number_of_replicas' -%>
+<%= print_value @nodetype, 'index.auto_expand_replicas' -%>
+<%= print_value @nodetype, 'index.mapper.dynamic' -%>
+<%= print_value @nodetype, 'index.query.bool.max_clause_count' -%>
+<%= print_value @nodetype, 'index.translog.flush_threshold_period' -%>
+<%= print_value @nodetype, 'index.refresh_interval' -%>
+<%= print_value @nodetype, 'indices.memory.index_buffer_size' -%>
+<%= print_value @nodetype, 'index.cache.field.type' -%>
+<%= print_value @nodetype, 'action.auto_create_index' -%>
+<%= print_value @nodetype, 'action.disable_delete_all_indices' -%>
+
+#################################### Paths ####################################
+
+<%= print_value @nodetype, 'path.conf' -%>
+<%= print_value @nodetype, 'path.data', (node.elasticsearch[@nodetype][:path][:data].is_a?(Array) ? node.elasticsearch[@nodetype][:path][:data].join(",") : node.elasticsearch[@nodetype][:path][:data]) -%>
+<%= print_value @nodetype, 'path.work' -%>
+<%= print_value @nodetype, 'path.logs' -%>
+<%= print_value @nodetype, 'path.plugins' -%>
+
+#################################### Plugin ###################################
+
+<%= print_value @nodetype, 'security.manager.enabled' -%>
+<%= print_value @nodetype, 'plugin.mandatory' -%>
+
+################################### Memory ####################################
+
+<%= print_value @nodetype, 'bootstrap.mlockall' -%>
+
+############################## Network And HTTP ###############################
+
+<%= print_value @nodetype, 'network.bind_host' -%>
+<%= print_value @nodetype, 'network.publish_host' -%>
+<%= print_value @nodetype, 'network.host' -%>
+<%= print_value @nodetype, 'transport.tcp.port' -%>
+<%= print_value @nodetype, 'transport.tcp.compress' -%>
+<%= print_value @nodetype, 'http.host' -%>
+<%= print_value @nodetype, 'http.port' -%>
+<%= print_value @nodetype, 'http.max_content_length' -%>
+<%= print_value @nodetype, 'http.enabled' -%>
+
+################################### Gateway ###################################
+
+<%= print_value @nodetype, 'gateway.type' -%>
+<%= print_value @nodetype, 'gateway.recover_after_nodes' -%>
+<%= print_value @nodetype, 'gateway.recover_after_time' -%>
+<%= print_value @nodetype, 'gateway.expected_nodes' -%>
+
+############################# Recovery Throttling #############################
+
+<%= print_value @nodetype, 'cluster.routing.allocation.node_initial_primaries_recoveries' -%>
+<%= print_value @nodetype, 'cluster.routing.allocation.node_concurrent_recoveries' -%>
+<%= print_value @nodetype, 'indices.recovery.max_size_per_sec' -%>
+<%= print_value @nodetype, 'indices.recovery.concurrent_streams' -%>
+
+################################## Discovery ##################################
+
+<%= print_value @nodetype, 'discovery.type' -%>
+<%= print_value @nodetype, 'discovery.zen.minimum_master_nodes' -%>
+<%= print_value @nodetype, 'discovery.zen.ping.timeout' -%>
+<%= print_value @nodetype, 'discovery.zen.ping.multicast.enabled' -%>
+<%= print_value @nodetype, 'discovery.zen.ping.unicast.hosts' -%>
+
+
+################################## Slow Log ###################################
+
+<%= print_value @nodetype, 'index.search.slowlog.threshold.query.warn' -%>
+<%= print_value @nodetype, 'index.search.slowlog.threshold.query.info' -%>
+<%= print_value @nodetype, 'index.search.slowlog.threshold.query.debug' -%>
+<%= print_value @nodetype, 'index.search.slowlog.threshold.query.trace' -%>
+<%= print_value @nodetype, 'index.search.slowlog.threshold.fetch.warn' -%>
+<%= print_value @nodetype, 'index.search.slowlog.threshold.fetch.info' -%>
+<%= print_value @nodetype, 'index.search.slowlog.threshold.fetch.debug' -%>
+<%= print_value @nodetype, 'index.search.slowlog.threshold.fetch.trace' -%>
+<%= print_value @nodetype, 'index.indexing.slowlog.threshold.index.warn' -%>
+<%= print_value @nodetype, 'index.indexing.slowlog.threshold.index.info' -%>
+<%= print_value @nodetype, 'index.indexing.slowlog.threshold.index.debug' -%>
+<%= print_value @nodetype, 'index.indexing.slowlog.threshold.index.trace' -%>
+
+################################## GC Logging #################################
+
+<%= print_value @nodetype, 'monitor.jvm.gc.ParNew.warn' -%>
+<%= print_value @nodetype, 'monitor.jvm.gc.ParNew.info' -%>
+<%= print_value @nodetype, 'monitor.jvm.gc.ParNew.debug' -%>
+<%= print_value @nodetype, 'monitor.jvm.gc.ConcurrentMarkSweep.warn' -%>
+<%= print_value @nodetype, 'monitor.jvm.gc.ConcurrentMarkSweep.info' -%>
+<%= print_value @nodetype, 'monitor.jvm.gc.ConcurrentMarkSweep.debug' -%>
+
+################################## JMX ########################################
+
+<%- if node.elasticsearch[:jmx] -%>
+jmx.create_connector: true
+jmx.port: 9400-9500
+jmx.domain: elasticsearch
+<%- end -%>
+
+################################## Custom #####################################
+
+<% node.elasticsearch[:custom_config].sort.each do |key, value| %>
+<%= key %>: <%= value %>
+<% end %>
