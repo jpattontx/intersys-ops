@@ -1,0 +1,42 @@
+---
+driver:
+  name: vagrant
+  customize:
+    memory: 2048
+    cpus: 1
+  authorize: /Users/jpatton/.ssh/id_rsa.pub
+  keys:
+    - /Users/jpatton/.ssh/id_rsa
+
+provisioner:
+  name: chef_zero
+
+#verifier:
+#  name: inspec
+
+platforms:
+  - name: centos-7.2
+#  - name: centos-6.8
+#  - name: ubuntu-16.04
+
+suites:
+  - name: default
+    run_list:
+      - recipe[elasticsearch::data]
+#    verifier:
+#      inspec_tests:
+#        - test/recipes
+    attributes:
+      chef_client:
+        config:
+          log_level: ":debug"
+      java:
+        jdk_version: 8
+      elasticsearch:
+        network:
+          host: 0.0.0.0
+        discovery:
+          zen:
+            minimum_master_nodes: 1
+        plugin:
+          mandatory: ["license","marvel-agent","watcher","shield","lang-python","repository-hdfs"]
